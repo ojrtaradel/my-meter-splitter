@@ -33,3 +33,6 @@ By leveraging the Google Gemini API, this app eliminates manual data entry by ex
    ```bash
    git clone [https://github.com/ojrtaradel/my-meter-splitter.git](https://github.com/ojrtaradel/my-meter-splitter.git)
    cd my-meter-splitter
+
+## Screenshot
+<img width="249" height="500" alt="image" src="https://github.com/user-attachments/assets/71f74d6c-ce62-4390-9f15-71a1035efc6d" />
