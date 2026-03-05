@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "428167432949",
+    "project_id": "meter-splitter-app",
+    "storage_bucket": "meter-splitter-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:428167432949:android:bbba51bd61e06f1e8fd3bc",
+        "android_client_info": {
+          "package_name": "com.example.meter_splitter"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBIDfidFeSr0Z8Ph0Qft436nyihBFD4K-c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

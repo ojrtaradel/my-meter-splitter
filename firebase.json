@@ -1,0 +1,37 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "meter-splitter-app",
+          "appId": "1:428167432949:android:bbba51bd61e06f1e8fd3bc",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "meter-splitter-app",
+          "configurations": {
+            "android": "1:428167432949:android:bbba51bd61e06f1e8fd3bc",
+            "ios": "1:428167432949:ios:7bc3ca56975446818fd3bc",
+            "web": "1:428167432949:web:9773421f855c38338fd3bc"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}
