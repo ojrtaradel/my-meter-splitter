@@ -84,7 +84,7 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
   bool _isPrevReadingLocked = false;
   
   double _rate = 0.0;
-  double _prevRate = 0.0; // Variable to hold last month's rate
+  double _prevRate = 0.0; 
   double _subConsumed = 0.0;
   double _motherConsumed = 0.0;
   double _subBill = 0.0;
@@ -117,7 +117,6 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
             _isPrevReadingLocked = true; 
           }
           if (breakdown != null && breakdown['ratePerKwh'] != null) {
-            // Use 'num' cast first to safely handle both int and double from Firestore
             _prevRate = (breakdown['ratePerKwh'] as num).toDouble();
           }
         });
@@ -285,7 +284,6 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
         setState(() {
           _prevReadingController.text = _newReadingController.text;
           _isPrevReadingLocked = true;
-          // Set the current rate as the new "previous rate" for the next calculation
           _prevRate = _rate; 
         });
       }
@@ -316,6 +314,19 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
         foregroundColor: Colors.white,
         elevation: 0,
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.dashboard_rounded, size: 28),
+            tooltip: 'View History',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const AdminDashboard()),
+              );
+            },
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: Center(
         child: SingleChildScrollView(
@@ -489,7 +500,6 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
                   children: [
                     Text('₱${_rate.toStringAsFixed(4)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                     
-                    // The dynamic visual trend indicator
                     if (_prevRate > 0)
                       Row(
                         mainAxisSize: MainAxisSize.min,
@@ -499,8 +509,8 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
                                 ? Icons.trending_up_rounded 
                                 : (_rate < _prevRate ? Icons.trending_down_rounded : Icons.trending_flat_rounded),
                             color: _rate > _prevRate 
-                                ? const Color(0xFFDC2626) // Red for price up
-                                : (_rate < _prevRate ? const Color(0xFF059669) : const Color(0xFF9CA3AF)), // Green for down, Grey for same
+                                ? const Color(0xFFDC2626) 
+                                : (_rate < _prevRate ? const Color(0xFF059669) : const Color(0xFF9CA3AF)), 
                             size: 18,
                           ),
                           const SizedBox(width: 4),
@@ -584,6 +594,251 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
           ],
         ),
       ],
+    );
+  }
+}
+
+// ============================================================================
+// ADMIN DASHBOARD SCREEN
+// ============================================================================
+
+class AdminDashboard extends StatelessWidget {
+  const AdminDashboard({super.key});
+
+  // --- SECURE DELETE CONFIRMATION ---
+  Future<void> _confirmDelete(BuildContext context, String docId) async {
+    final pinController = TextEditingController();
+    
+    // --- THIS IS YOUR ADMIN PIN ---
+    // Change this string to whatever PIN code you want to use.
+    const String adminPin = "063941"; 
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Admin Authorization', style: TextStyle(fontWeight: FontWeight.bold)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Enter the Admin PIN to permanently delete this billing record.', style: TextStyle(fontSize: 16)),
+            const SizedBox(height: 20),
+            TextField(
+              controller: pinController,
+              keyboardType: TextInputType.number,
+              obscureText: true, // Hides the PIN with dots as you type
+              decoration: InputDecoration(
+                labelText: 'PIN Code',
+                prefixIcon: const Icon(Icons.lock_outline),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFDC2626), width: 2),
+                ),
+              ),
+              style: const TextStyle(fontSize: 20, letterSpacing: 4),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false), // Cancel logic
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280), fontSize: 16)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () {
+              // PIN Verification Logic
+              if (pinController.text == adminPin) {
+                Navigator.pop(context, true); // PIN matches, send True to proceed
+              } else {
+                Navigator.pop(context, false); // Wrong PIN, send False to abort
+                // Show red error bar
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Incorrect PIN. Deletion aborted.', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    backgroundColor: Color(0xFFDC2626),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            },
+            child: const Text('Delete', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
+        ],
+      ),
+    );
+
+    // If the PIN matched and confirm is True, delete the document from Firebase
+    if (confirm == true) {
+      try {
+        await FirebaseFirestore.instance.collection('monthly_bills').doc(docId).delete();
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Record successfully deleted.', style: TextStyle(fontSize: 16)),
+              backgroundColor: Color(0xFF374151),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error deleting: $e', style: const TextStyle(fontSize: 16)),
+              backgroundColor: const Color(0xFFDC2626),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Theme.of(context).colorScheme.background,
+      appBar: AppBar(
+        title: const Text('Billing History', style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Colors.white,
+        elevation: 0,
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('monthly_bills').orderBy('timestamp', descending: true).snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return const Center(child: Text('Something went wrong.'));
+          }
+
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final docs = snapshot.data?.docs ?? [];
+
+          if (docs.isEmpty) {
+            return const Center(
+              child: Text('No bills saved yet.', style: TextStyle(fontSize: 20, color: Colors.grey)),
+            );
+          }
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(16.0),
+            itemCount: docs.length,
+            itemBuilder: (context, index) {
+              final document = docs[index]; 
+              final docId = document.id; 
+              final data = document.data() as Map<String, dynamic>;
+              
+              final timestamp = data['timestamp'] as Timestamp?;
+              final dateStr = timestamp != null 
+                  ? "${timestamp.toDate().month}/${timestamp.toDate().day}/${timestamp.toDate().year}"
+                  : "Pending...";
+
+              final inputs = data['inputs'] as Map<String, dynamic>? ?? {};
+              final breakdown = data['calculatedBreakdown'] as Map<String, dynamic>? ?? {};
+
+              final totalBill = (inputs['totalBill'] as num?)?.toDouble() ?? 0.0;
+              final rate = (breakdown['ratePerKwh'] as num?)?.toDouble() ?? 0.0;
+              final subAmount = (breakdown['subMeterAmount'] as num?)?.toDouble() ?? 0.0;
+              final motherAmount = (breakdown['motherMeterAmount'] as num?)?.toDouble() ?? 0.0;
+
+              return Card(
+                elevation: 2,
+                margin: const EdgeInsets.only(bottom: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                child: Padding(
+                  padding: const EdgeInsets.all(20.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Header: Date, Rate, and Delete Button
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.calendar_month, color: Color(0xFF6B7280), size: 20),
+                              const SizedBox(width: 8),
+                              Text(dateStr, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF374151))),
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(20)),
+                                child: Text('Rate: ₱${rate.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFF047857), fontWeight: FontWeight.bold)),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline, color: Color(0xFFDC2626)),
+                                tooltip: 'Delete Record',
+                                splashRadius: 24,
+                                onPressed: () => _confirmDelete(context, docId),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const Divider(height: 24, thickness: 1.5, color: Color(0xFFF3F4F6)),
+                      
+                      // Body: The Split
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Mother Meter Due', style: TextStyle(color: Color(0xFF6B7280), fontSize: 14)),
+                                const SizedBox(height: 4),
+                                Text('₱${motherAmount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1D4ED8))),
+                              ],
+                            ),
+                          ),
+                          Container(width: 1.5, height: 40, color: const Color(0xFFF3F4F6)),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                const Text('Sub-meter Due', style: TextStyle(color: Color(0xFF6B7280), fontSize: 14)),
+                                const SizedBox(height: 4),
+                                Text('₱${subAmount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF047857))),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      
+                      // Footer: Total
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('Original Total Bill:', style: TextStyle(color: Color(0xFF4B5563), fontWeight: FontWeight.w600)),
+                            Text('₱${totalBill.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                          ],
+                        ),
+                      )
+                    ],
+                  ),
+                ),
+              ).animate().fade().slideY(begin: 0.1, curve: Curves.easeOut);
+            },
+          );
+        },
+      ),
     );
   }
 }
