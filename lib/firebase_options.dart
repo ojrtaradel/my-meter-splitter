@@ -71,4 +71,5 @@ class DefaultFirebaseOptions {
     storageBucket: 'meter-splitter-app.firebasestorage.app',
     iosBundleId: 'com.example.meterSplitter',
   );
+
 }

@@ -5,14 +5,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart'; // Added dotenv import
 import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Load the hidden environment variables
-  await dotenv.load(fileName: ".env");
 
   try {
     await Firebase.initializeApp(
@@ -69,8 +65,9 @@ class MeterSplitterHome extends StatefulWidget {
 }
 
 class _MeterSplitterHomeState extends State<MeterSplitterHome> {
-  final _motherNameController = TextEditingController(text: "Lot 39");
-  final _subNameController = TextEditingController(text: "Lot 41");
+  final _motherNameController = TextEditingController(text: "Block 6 Lot 39");
+  final _subNameController = TextEditingController(text: "Block 6 Lot 41");
+  
   final _totalBillController = TextEditingController();
   final _totalKwhController = TextEditingController();
   final _prevReadingController = TextEditingController();
@@ -83,20 +80,64 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
   bool _isScanningBill = false;
   bool _isScanningMeter = false;
   
+  bool _isLoadingHistory = true;
+  bool _isPrevReadingLocked = false;
+  
   double _rate = 0.0;
+  double _prevRate = 0.0; // Variable to hold last month's rate
   double _subConsumed = 0.0;
   double _motherConsumed = 0.0;
   double _subBill = 0.0;
   double _motherBill = 0.0;
   double _checkTotal = 0.0;
 
+  @override
+  void initState() {
+    super.initState();
+    _fetchLatestReading();
+  }
+
+  // --- DATABASE FETCH LOGIC ---
+  Future<void> _fetchLatestReading() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('monthly_bills')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+
+      if (snapshot.docs.isNotEmpty) {
+        final latestDoc = snapshot.docs.first.data();
+        final inputs = latestDoc['inputs'] as Map<String, dynamic>?;
+        final breakdown = latestDoc['calculatedBreakdown'] as Map<String, dynamic>?;
+        
+        setState(() {
+          if (inputs != null && inputs['newReading'] != null) {
+            _prevReadingController.text = inputs['newReading'].toString();
+            _isPrevReadingLocked = true; 
+          }
+          if (breakdown != null && breakdown['ratePerKwh'] != null) {
+            // Use 'num' cast first to safely handle both int and double from Firestore
+            _prevRate = (breakdown['ratePerKwh'] as num).toDouble();
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint("Error fetching history: $e");
+    } finally {
+      setState(() {
+        _isLoadingHistory = false;
+      });
+    }
+  }
+
   // --- AI SCANNING LOGIC ---
 
   Future<void> _scanBillImage() async {
-    // Pull the key securely from the environment
-    final apiKey = dotenv.env['GEMINI_API_KEY'];
-    if (apiKey == null || apiKey.isEmpty) {
-      _showErrorSnackBar('API Key missing. Please check your .env file.');
+    const apiKey = String.fromEnvironment('GEMINI_API_KEY');
+    
+    if (apiKey.isEmpty) {
+      _showErrorSnackBar('API Key missing. Please check your build command.');
       return;
     }
 
@@ -136,10 +177,10 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
   }
 
   Future<void> _scanMeterImage() async {
-    // Pull the key securely from the environment
-    final apiKey = dotenv.env['GEMINI_API_KEY'];
-    if (apiKey == null || apiKey.isEmpty) {
-      _showErrorSnackBar('API Key missing. Please check your .env file.');
+    const apiKey = String.fromEnvironment('GEMINI_API_KEY');
+    
+    if (apiKey.isEmpty) {
+      _showErrorSnackBar('API Key missing. Please check your build command.');
       return;
     }
 
@@ -237,8 +278,16 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
       };
 
       await FirebaseFirestore.instance.collection('monthly_bills').add(billRecord);
+      
       if (mounted) {
         _showSuccessSnackBar('Bill saved successfully!');
+        
+        setState(() {
+          _prevReadingController.text = _newReadingController.text;
+          _isPrevReadingLocked = true;
+          // Set the current rate as the new "previous rate" for the next calculation
+          _prevRate = _rate; 
+        });
       }
     } catch (e) {
       if (mounted) _showErrorSnackBar('Failed to save: $e');
@@ -306,9 +355,31 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
     return [
       Row(
         children: [
-          Expanded(child: TextField(controller: _motherNameController, decoration: const InputDecoration(labelText: 'Mother Meter Name'))),
+          Expanded(
+            child: TextField(
+              controller: _motherNameController, 
+              readOnly: true, 
+              decoration: const InputDecoration(
+                labelText: 'Mother Meter',
+                fillColor: Color(0xFFF3F4F6),
+                suffixIcon: Icon(Icons.lock, color: Color(0xFF9CA3AF)),
+              ),
+              style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.bold),
+            ),
+          ),
           const SizedBox(width: 16),
-          Expanded(child: TextField(controller: _subNameController, decoration: const InputDecoration(labelText: 'Sub-meter Name'))),
+          Expanded(
+            child: TextField(
+              controller: _subNameController, 
+              readOnly: true, 
+              decoration: const InputDecoration(
+                labelText: 'Sub-meter',
+                fillColor: Color(0xFFF3F4F6),
+                suffixIcon: Icon(Icons.lock, color: Color(0xFF9CA3AF)),
+              ),
+              style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.bold),
+            ),
+          ),
         ],
       ),
       
@@ -362,12 +433,28 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
         ],
       ),
       const SizedBox(height: 16),
+      
       TextField(
         controller: _prevReadingController,
+        readOnly: _isPrevReadingLocked,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: const InputDecoration(labelText: 'Sub-meter Previous Reading'),
-        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+        decoration: InputDecoration(
+          labelText: 'Sub-meter Previous Reading',
+          fillColor: _isPrevReadingLocked ? const Color(0xFFF3F4F6) : Colors.white,
+          suffixIcon: _isLoadingHistory
+              ? const Padding(
+                  padding: EdgeInsets.all(12.0),
+                  child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                )
+              : (_isPrevReadingLocked ? const Icon(Icons.lock, color: Color(0xFF9CA3AF)) : null),
+        ),
+        style: TextStyle(
+          fontSize: 24, 
+          fontWeight: FontWeight.bold,
+          color: _isPrevReadingLocked ? const Color(0xFF6B7280) : const Color(0xFF1F2937),
+        ),
       ),
+      
       const SizedBox(height: 24),
       TextField(
         controller: _newReadingController,
@@ -397,7 +484,42 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text('Rate per kWh:', style: TextStyle(fontSize: 20, color: Color(0xFF4B5563))),
-                Text('₱${_rate.toStringAsFixed(4)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text('₱${_rate.toStringAsFixed(4)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                    
+                    // The dynamic visual trend indicator
+                    if (_prevRate > 0)
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _rate > _prevRate 
+                                ? Icons.trending_up_rounded 
+                                : (_rate < _prevRate ? Icons.trending_down_rounded : Icons.trending_flat_rounded),
+                            color: _rate > _prevRate 
+                                ? const Color(0xFFDC2626) // Red for price up
+                                : (_rate < _prevRate ? const Color(0xFF059669) : const Color(0xFF9CA3AF)), // Green for down, Grey for same
+                            size: 18,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _rate == _prevRate 
+                                ? 'No change'
+                                : '₱${(_rate - _prevRate).abs().toStringAsFixed(4)} vs last mo.',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: _rate > _prevRate 
+                                  ? const Color(0xFFDC2626) 
+                                  : (_rate < _prevRate ? const Color(0xFF059669) : const Color(0xFF9CA3AF)),
+                            ),
+                          ),
+                        ],
+                      ).animate().fade(delay: 600.ms).slideY(begin: -0.2, curve: Curves.easeOutQuad),
+                  ],
+                ),
               ],
             ),
           ),
