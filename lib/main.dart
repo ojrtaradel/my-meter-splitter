@@ -87,7 +87,7 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
   bool _isScanningMeter = false;
   bool _isLoadingHistory = true;
   bool _isPrevReadingLocked = false;
-  bool _isCalculating = false; // GSAP Animation Trigger
+  bool _isCalculating = false; 
   
   double _prevRate = 0.0; 
 
@@ -238,7 +238,6 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
       return;
     }
 
-    // Trigger the GSAP Morph Animation
     setState(() => _isCalculating = true);
     await Future.delayed(const Duration(milliseconds: 1200));
 
@@ -248,7 +247,6 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
     final subBill = subConsumed * rate;
     final motherBill = motherConsumed * rate;
 
-    // Reset button state
     setState(() => _isCalculating = false);
 
     if (!mounted) return;
@@ -333,7 +331,6 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
                 ..._buildFormFields().animate(interval: 50.ms).fade(duration: 400.ms).slideY(begin: 0.1, curve: Curves.easeOutQuad),
                 const SizedBox(height: 32),
                 
-                // RESTORED: The GSAP-style 3D Morphing Button
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 300),
                   curve: Curves.easeOutBack,
@@ -501,7 +498,7 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
 }
 
 // ============================================================================
-// RESULTS SCREEN (WITH 3D GSAP-STYLE ENTRANCE & MATH EXPLANATION)
+// RESULTS SCREEN 
 // ============================================================================
 
 class ResultsScreen extends StatefulWidget {
@@ -712,13 +709,9 @@ class _ResultsScreenState extends State<ResultsScreen> {
                     label: Text(_isSaving ? 'Uploading Photos & Saving...' : 'Save Record', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                   ),
                 )
-              ]
-              // RESTORED: Staggers the elements inside the card
-              .animate(interval: 100.ms).fadeIn(duration: 400.ms).slideY(begin: 0.1, curve: Curves.easeOutQuad),
+              ].animate(interval: 100.ms).fadeIn(duration: 400.ms).slideY(begin: 0.1, curve: Curves.easeOutQuad),
             ),
-          )
-          // RESTORED: The 3D Flip entrance for the Results Card
-          .animate()
+          ).animate()
           .fadeIn(duration: 600.ms)
           .flipV(begin: -0.15, end: 0, duration: 800.ms, curve: Curves.easeOutBack)
           .scale(begin: const Offset(0.9, 0.9), end: const Offset(1, 1), duration: 800.ms, curve: Curves.easeOutBack),
@@ -770,7 +763,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
 }
 
 // ============================================================================
-// ADMIN DASHBOARD SCREEN (WITH DYNAMIC NAMES)
+// ADMIN DASHBOARD SCREEN
 // ============================================================================
 
 class AdminDashboard extends StatelessWidget {
@@ -948,6 +941,7 @@ class AdminDashboard extends StatelessWidget {
               final breakdown = data['calculatedBreakdown'] as Map<String, dynamic>? ?? {};
 
               final totalBill = (inputs['totalBill'] as num?)?.toDouble() ?? 0.0;
+              final totalKwh = (inputs['totalKwh'] as num?)?.toDouble() ?? 0.0;
               final rate = (breakdown['ratePerKwh'] as num?)?.toDouble() ?? 0.0;
               final subAmount = (breakdown['subMeterAmount'] as num?)?.toDouble() ?? 0.0;
               final motherAmount = (breakdown['motherMeterAmount'] as num?)?.toDouble() ?? 0.0;
@@ -967,6 +961,7 @@ class AdminDashboard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // TOP ROW: Date & Delete Button
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -977,26 +972,44 @@ class AdminDashboard extends StatelessWidget {
                               Text(dateStr, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF374151))),
                             ],
                           ),
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(20)),
-                                child: Text('Rate: ₱${rate.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFF047857), fontWeight: FontWeight.bold)),
-                              ),
-                              const SizedBox(width: 8),
-                              IconButton(
-                                icon: const Icon(Icons.delete_outline, color: Color(0xFFDC2626)),
-                                tooltip: 'Delete Record',
-                                splashRadius: 24,
-                                onPressed: () => _confirmDelete(context, docId, billImageUrl, meterImageUrl),
-                              ),
-                            ],
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, color: Color(0xFFDC2626)),
+                            tooltip: 'Delete Record',
+                            splashRadius: 24,
+                            onPressed: () => _confirmDelete(context, docId, billImageUrl, meterImageUrl),
                           ),
                         ],
                       ),
-                      const Divider(height: 24, thickness: 1.5, color: Color(0xFFF3F4F6)),
+                      const SizedBox(height: 8),
+
+                      // NEW EXPLICIT MATH BOX (Prevents screen overflow hiding the text)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE8F5E9),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFA7F3D0)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Rate: ₱${rate.toStringAsFixed(4)} per kWh', 
+                              style: const TextStyle(color: Color(0xFF047857), fontWeight: FontWeight.bold, fontSize: 16)
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Formula: ₱${totalBill.toStringAsFixed(2)} ÷ ${totalKwh.toStringAsFixed(1)} kWh',
+                              style: const TextStyle(color: Color(0xFF065F46), fontSize: 13, fontStyle: FontStyle.italic),
+                            ),
+                          ],
+                        ),
+                      ),
                       
+                      const Divider(height: 32, thickness: 1.5, color: Color(0xFFF3F4F6)),
+                      
+                      // THE SPLIT WITH DYNAMIC NAMES
                       Row(
                         children: [
                           Expanded(
