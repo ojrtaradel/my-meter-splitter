@@ -27,7 +27,7 @@ Meter Splitter automates this entirely. It calculates the *exact* floating rate 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/ac794ca9-0d0a-4f1c-91ac-7ff2102e8276" width="30%" alt="Main Dashboard Input Screen">&nbsp; &nbsp; &nbsp;
   <img src="https://github.com/user-attachments/assets/39a95319-e047-4568-807e-446de6c81191" width="30%" alt="Computation Results Screen">&nbsp; &nbsp; &nbsp;
-  <img src="https://github.com/user-attachments/assets/dcb34464-7837-4b4f-b598-9a26123a1514)" width="30%" alt="Billing History Dashboard">&nbsp; &nbsp; &nbsp;
+  <img src="https://github.com/user-attachments/assets/dcb34464-7837-4b4f-b598-9a26123a1514" width="30%" alt="Billing History Dashboard">&nbsp; &nbsp; &nbsp;
 </p>
 
 ---
