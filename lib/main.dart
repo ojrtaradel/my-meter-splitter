@@ -1,3 +1,4 @@
+// [Version: v1.4.1]
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -614,6 +615,9 @@ class _ResultsScreenState extends State<ResultsScreen> {
         'timestamp': FieldValue.serverTimestamp(),
         'motherMeterName': widget.motherName,
         'subMeterName': widget.subName,
+        'isPaid': false, 
+        'paymentDate': null,
+        'receiptImageUrl': null,
         'inputs': {
           'totalBill': widget.totalBill,
           'totalKwh': widget.totalKwh,
@@ -814,10 +818,97 @@ class _ResultsScreenState extends State<ResultsScreen> {
 // ADMIN DASHBOARD SCREEN
 // ============================================================================
 
-class AdminDashboard extends StatelessWidget {
+class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
 
-  Future<void> _confirmDelete(BuildContext context, String docId, String? billUrl, String? meterUrl) async {
+  @override
+  State<AdminDashboard> createState() => _AdminDashboardState();
+}
+
+class _AdminDashboardState extends State<AdminDashboard> {
+  final ImagePicker _picker = ImagePicker();
+
+  Future<void> _markAsPaid(BuildContext context, String docId) async {
+    final DateTime? pickedDate = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(primary: Color(0xFF00796B)),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (pickedDate == null) return; 
+
+    final XFile? image = await _picker.pickImage(
+      source: ImageSource.camera, 
+      imageQuality: 70, 
+      maxWidth: 1200, 
+      maxHeight: 1200
+    );
+    
+    if (image == null) return; 
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(color: Color(0xFF00796B)),
+            SizedBox(width: 20),
+            Text("Uploading receipt..."),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final ref = FirebaseStorage.instance.ref().child('receipts/${DateTime.now().millisecondsSinceEpoch}_${image.name}');
+      final metadata = SettableMetadata(contentType: 'image/jpeg');
+      
+      TaskSnapshot snapshot;
+      if (kIsWeb) {
+        snapshot = await ref.putData(await image.readAsBytes(), metadata);
+      } else {
+        snapshot = await ref.putFile(File(image.path), metadata);
+      }
+      
+      final downloadUrl = await snapshot.ref.getDownloadURL();
+
+      await FirebaseFirestore.instance.collection('monthly_bills').doc(docId).update({
+        'isPaid': true,
+        'paymentDate': Timestamp.fromDate(pickedDate),
+        'receiptImageUrl': downloadUrl,
+      });
+
+      if (!mounted) return;
+      Navigator.pop(context); 
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Payment officially recorded! ✅', style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Color(0xFF059669),
+        behavior: SnackBarBehavior.floating,
+      ));
+
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); 
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Error: $e', style: const TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: const Color(0xFFDC2626),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  Future<void> _confirmDelete(BuildContext context, String docId, String? billUrl, String? meterUrl, String? receiptUrl) async {
     final pinController = TextEditingController();
     const String adminPin = "063941"; 
 
@@ -884,6 +975,7 @@ class AdminDashboard extends StatelessWidget {
       try {
         if (billUrl != null) await FirebaseStorage.instance.refFromURL(billUrl).delete();
         if (meterUrl != null) await FirebaseStorage.instance.refFromURL(meterUrl).delete();
+        if (receiptUrl != null) await FirebaseStorage.instance.refFromURL(receiptUrl).delete();
 
         await FirebaseFirestore.instance.collection('monthly_bills').doc(docId).delete();
         if (context.mounted) {
@@ -997,9 +1089,16 @@ class AdminDashboard extends StatelessWidget {
 
               final billImageUrl = data['billImageUrl'] as String?;
               final meterImageUrl = data['meterImageUrl'] as String?;
-              
+              final receiptImageUrl = data['receiptImageUrl'] as String?; 
+
               final motherNameDisplay = data['motherMeterName'] as String? ?? 'Mother Meter';
               final subNameDisplay = data['subMeterName'] as String? ?? 'Sub-meter';
+              
+              final isPaid = data['isPaid'] as bool? ?? false; 
+              final paymentDateTs = data['paymentDate'] as Timestamp?; 
+              final paymentDateStr = paymentDateTs != null 
+                  ? "${paymentDateTs.toDate().month}/${paymentDateTs.toDate().day}/${paymentDateTs.toDate().year}"
+                  : "";
 
               return Card(
                 elevation: 2,
@@ -1049,7 +1148,7 @@ class AdminDashboard extends StatelessWidget {
                                 icon: const Icon(Icons.delete_outline, color: Color(0xFFDC2626)),
                                 tooltip: 'Delete Record',
                                 splashRadius: 24,
-                                onPressed: () => _confirmDelete(context, docId, billImageUrl, meterImageUrl),
+                                onPressed: () => _confirmDelete(context, docId, billImageUrl, meterImageUrl, receiptImageUrl),
                               ),
                             ],
                           ),
@@ -1087,62 +1186,115 @@ class AdminDashboard extends StatelessWidget {
                         ],
                       ),
                       
-                      if (billImageUrl != null || meterImageUrl != null) ...[
+                      if (billImageUrl != null || meterImageUrl != null || receiptImageUrl != null) ...[
                         const SizedBox(height: 20),
-                        const Text('Audit Photos:', style: TextStyle(color: Color(0xFF4B5563), fontWeight: FontWeight.w600)),
+                        const Text('Audit Photos & Receipts:', style: TextStyle(color: Color(0xFF4B5563), fontWeight: FontWeight.w600)),
                         const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            if (billImageUrl != null)
-                              GestureDetector(
-                                onTap: () => _showImageDialog(context, billImageUrl, 'Original Bill'),
-                                child: Container(
-                                  margin: const EdgeInsets.only(right: 12),
-                                  height: 64,
-                                  width: 64,
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: const Color(0xFFD1D5DB), width: 2),
-                                    image: DecorationImage(image: NetworkImage(billImageUrl), fit: BoxFit.cover),
-                                  ),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              if (billImageUrl != null)
+                                GestureDetector(
+                                  onTap: () => _showImageDialog(context, billImageUrl, 'Original Bill'),
                                   child: Container(
-                                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.3), borderRadius: BorderRadius.circular(10)),
-                                    child: const Center(child: Icon(Icons.receipt_long, color: Colors.white, size: 28)),
+                                    margin: const EdgeInsets.only(right: 12),
+                                    height: 64,
+                                    width: 64,
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: const Color(0xFFD1D5DB), width: 2),
+                                      image: DecorationImage(image: NetworkImage(billImageUrl), fit: BoxFit.cover),
+                                    ),
+                                    child: Container(
+                                      decoration: BoxDecoration(color: Colors.black.withOpacity(0.3), borderRadius: BorderRadius.circular(10)),
+                                      child: const Center(child: Icon(Icons.receipt_long, color: Colors.white, size: 28)),
+                                    ),
                                   ),
                                 ),
-                              ),
-                            if (meterImageUrl != null)
-                              GestureDetector(
-                                onTap: () => _showImageDialog(context, meterImageUrl, 'Meter Reading'),
-                                child: Container(
-                                  height: 64,
-                                  width: 64,
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: const Color(0xFFD1D5DB), width: 2),
-                                    image: DecorationImage(image: NetworkImage(meterImageUrl), fit: BoxFit.cover),
-                                  ),
+                              if (meterImageUrl != null)
+                                GestureDetector(
+                                  onTap: () => _showImageDialog(context, meterImageUrl, 'Meter Reading'),
                                   child: Container(
-                                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.3), borderRadius: BorderRadius.circular(10)),
-                                    child: const Center(child: Icon(Icons.electric_meter, color: Colors.white, size: 28)),
+                                    margin: const EdgeInsets.only(right: 12),
+                                    height: 64,
+                                    width: 64,
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: const Color(0xFFD1D5DB), width: 2),
+                                      image: DecorationImage(image: NetworkImage(meterImageUrl), fit: BoxFit.cover),
+                                    ),
+                                    child: Container(
+                                      decoration: BoxDecoration(color: Colors.black.withOpacity(0.3), borderRadius: BorderRadius.circular(10)),
+                                      child: const Center(child: Icon(Icons.electric_meter, color: Colors.white, size: 28)),
+                                    ),
                                   ),
                                 ),
-                              ),
-                          ],
+                              if (receiptImageUrl != null) 
+                                GestureDetector(
+                                  onTap: () => _showImageDialog(context, receiptImageUrl, 'Payment Receipt'),
+                                  child: Container(
+                                    margin: const EdgeInsets.only(right: 12),
+                                    height: 64,
+                                    width: 64,
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: const Color(0xFFD1D5DB), width: 2),
+                                      image: DecorationImage(image: NetworkImage(receiptImageUrl), fit: BoxFit.cover),
+                                    ),
+                                    child: Container(
+                                      decoration: BoxDecoration(color: Colors.black.withOpacity(0.3), borderRadius: BorderRadius.circular(10)),
+                                      child: const Center(child: Icon(Icons.verified, color: Colors.white, size: 28)),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
                       ],
 
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text('Original Total Bill:', style: TextStyle(color: Color(0xFF4B5563), fontWeight: FontWeight.w600)),
-                            Text('₱${totalBill.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                          ],
-                        ),
+                      const Divider(height: 24, thickness: 1.5, color: Color(0xFFF3F4F6)),
+                      
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Original Total Bill:', style: TextStyle(color: Color(0xFF4B5563), fontWeight: FontWeight.w600, fontSize: 12)),
+                              Text('₱${totalBill.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF1F2937))),
+                            ],
+                          ),
+                          if (isPaid)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE8F5E9),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: const Color(0xFF81C784)),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.check_circle, color: Color(0xFF2E7D32), size: 16),
+                                  const SizedBox(width: 4),
+                                  Text('Settled $paymentDateStr', style: const TextStyle(color: Color(0xFF2E7D32), fontWeight: FontWeight.bold, fontSize: 12)),
+                                ],
+                              ),
+                            )
+                          else
+                            OutlinedButton.icon(
+                              onPressed: () => _markAsPaid(context, docId),
+                              icon: const Icon(Icons.payments_rounded, size: 20),
+                              label: const Text('Mark as Paid', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                foregroundColor: const Color(0xFF00796B),
+                                side: const BorderSide(color: Color(0xFF00796B), width: 1.5),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                            )
+                        ],
                       )
                     ],
                   ),
@@ -1157,7 +1309,7 @@ class AdminDashboard extends StatelessWidget {
 }
 
 // ============================================================================
-// USAGE CHARTS SCREEN (FINAL FULLY FIXED DATA VERSION)
+// USAGE CHARTS SCREEN
 // ============================================================================
 
 class UsageChartsScreen extends StatelessWidget {
@@ -1196,13 +1348,11 @@ class UsageChartsScreen extends StatelessWidget {
             final subAmount = (breakdown['subMeterAmount'] as num?)?.toDouble() ?? 0.0;
             final motherAmount = (breakdown['motherMeterAmount'] as num?)?.toDouble() ?? 0.0;
             
-            // Find highest values to scale the charts dynamically
             if (motherKwh > maxKwh) maxKwh = motherKwh;
             if (subKwh > maxKwh) maxKwh = subKwh;
             if (motherAmount > maxAmount) maxAmount = motherAmount;
             if (subAmount > maxAmount) maxAmount = subAmount;
 
-            // Extract the date for the labels
             final ts = data['timestamp'] as Timestamp?;
             if (ts != null) {
               final date = ts.toDate();
@@ -1211,9 +1361,9 @@ class UsageChartsScreen extends StatelessWidget {
               labels.add("N/A");
             }
 
-            // REVERTED to standard tap-to-view tooltips (no overlaps!)
             kwhData.add(BarChartGroupData(
               x: i, 
+              showingTooltipIndicators: [0, 1], 
               barRods: [
                 BarChartRodData(toY: motherKwh, color: const Color(0xFF1D4ED8), width: 14, borderRadius: BorderRadius.circular(4)),
                 BarChartRodData(toY: subKwh, color: const Color(0xFF047857), width: 14, borderRadius: BorderRadius.circular(4)),
@@ -1222,6 +1372,7 @@ class UsageChartsScreen extends StatelessWidget {
 
             amountData.add(BarChartGroupData(
               x: i, 
+              showingTooltipIndicators: [0, 1], 
               barRods: [
                 BarChartRodData(toY: motherAmount, color: const Color(0xFF1D4ED8), width: 14, borderRadius: BorderRadius.circular(4)),
                 BarChartRodData(toY: subAmount, color: const Color(0xFF047857), width: 14, borderRadius: BorderRadius.circular(4)),
@@ -1248,8 +1399,7 @@ class UsageChartsScreen extends StatelessWidget {
 
   Widget _buildChartCard(BuildContext context, String title, List<BarChartGroupData> data, List<String> labels, double maxValue, bool isAmount) {
     
-    // Mathematical step logic to prevent squishing text
-    double safeMax = maxValue <= 0 ? 100 : (maxValue * 1.2);
+    double safeMax = maxValue <= 0 ? 100 : (maxValue * 1.35);
     double stepInterval = (safeMax / 5).ceilToDouble();
     if (stepInterval == 0) stepInterval = 1;
 
@@ -1266,18 +1416,31 @@ class UsageChartsScreen extends StatelessWidget {
               height: 250,
               child: BarChart(
                 BarChartData(
-                  barGroups: data, // <--- CRITICAL FIX: THE DATA IS NOW CONNECTED
+                  barGroups: data, 
                   minY: 0, 
                   maxY: safeMax, 
                   barTouchData: BarTouchData(
-                    enabled: true, // You can now cleanly tap any bar to see its exact value
+                    enabled: false, 
                     touchTooltipData: BarTouchTooltipData(
-                      tooltipPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      tooltipMargin: 4,
+                      getTooltipColor: (group) => Colors.transparent, 
+                      tooltipPadding: EdgeInsets.zero,
+                      tooltipMargin: 2,
                       getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                        String valText;
+                        
+                        if (isAmount) {
+                          valText = '₱${rod.toY.toStringAsFixed(2)}';
+                        } else {
+                          if (rod.toY >= 1000) {
+                            valText = '${(rod.toY / 1000).toStringAsFixed(1)}k';
+                          } else {
+                            valText = rod.toY.toStringAsFixed(1);
+                          }
+                        }
+
                         return BarTooltipItem(
-                          isAmount ? '₱${rod.toY.toStringAsFixed(2)}' : '${rod.toY.toStringAsFixed(1)} kWh',
-                          const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                          valText,
+                          TextStyle(color: rod.color, fontWeight: FontWeight.bold, fontSize: 10), 
                         );
                       },
                     ),
@@ -1289,7 +1452,7 @@ class UsageChartsScreen extends StatelessWidget {
                         reservedSize: 45, 
                         interval: stepInterval, 
                         getTitlesWidget: (value, meta) {
-                          if (value < 0 || value == safeMax) return const SizedBox.shrink();
+                          if (value < 0 || value >= safeMax) return const SizedBox.shrink();
                           String text = value >= 1000 ? '${(value / 1000).toStringAsFixed(1)}k' : value.toInt().toString();
                           return Padding(
                             padding: const EdgeInsets.only(right: 8.0),
