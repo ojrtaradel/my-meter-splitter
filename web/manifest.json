@@ -1,11 +1,11 @@
 {
-    "name": "meter_splitter",
-    "short_name": "meter_splitter",
+    "name": "Meter Splitter",
+    "short_name": "Meter Splitter",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#F0F4F4",
-    "theme_color": "#00796B",
-    "description": "A new Flutter project.",
+    "background_color": "#0175C2",
+    "theme_color": "#0175C2",
+    "description": "AI-powered electricity bill calculator and sub-meter splitter.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

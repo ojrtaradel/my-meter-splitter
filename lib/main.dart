@@ -1,20 +1,18 @@
-import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
   try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   } catch (e) {
     debugPrint("Firebase init error: $e");
   }
@@ -30,10 +28,7 @@ class BillSplitterApp extends StatelessWidget {
       title: 'Meter Splitter',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF00796B),
-          background: const Color(0xFFF0F4F4),
-        ),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF00796B), background: const Color(0xFFF0F4F4)),
         useMaterial3: true,
         textTheme: const TextTheme(
           titleLarge: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Color(0xFF1F2937)),
@@ -83,8 +78,12 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
   XFile? _scannedBillImage;
   XFile? _scannedMeterImage;
 
-  bool _isScanningBill = false;
-  bool _isScanningMeter = false;
+  Future<String?>? _billUploadFuture;
+  Future<String?>? _meterUploadFuture;
+
+  bool _isBillUploaded = false;
+  bool _isMeterUploaded = false;
+
   bool _isLoadingHistory = true;
   bool _isPrevReadingLocked = false;
   bool _isCalculating = false; 
@@ -95,6 +94,26 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
   void initState() {
     super.initState();
     _fetchLatestReading();
+    
+    _totalBillController.addListener(_updateFormState);
+    _totalKwhController.addListener(_updateFormState);
+    _newReadingController.addListener(_updateFormState);
+  }
+
+  @override
+  void dispose() {
+    _totalBillController.removeListener(_updateFormState);
+    _totalKwhController.removeListener(_updateFormState);
+    _newReadingController.removeListener(_updateFormState);
+    _totalBillController.dispose();
+    _totalKwhController.dispose();
+    _prevReadingController.dispose();
+    _newReadingController.dispose();
+    super.dispose();
+  }
+
+  void _updateFormState() {
+    setState(() {}); 
   }
 
   Future<void> _fetchLatestReading() async {
@@ -129,95 +148,82 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
     }
   }
 
-  Future<void> _scanBillImage() async {
-    const apiKey = String.fromEnvironment('GEMINI_API_KEY');
-    if (apiKey.isEmpty) {
-      _showErrorSnackBar('API Key missing. Please check your build command.');
-      return;
-    }
-
+  Future<String?> _uploadImageInBackground(XFile file, String folderPath) async {
     try {
-      final XFile? image = await _picker.pickImage(source: ImageSource.camera, imageQuality: 70); 
-      if (image == null) return;
-
-      setState(() {
-        _isScanningBill = true;
-        _scannedBillImage = image; 
-      });
-
-      final bytes = await image.readAsBytes();
-      final model = GenerativeModel(model: 'gemini-1.5-flash', apiKey: apiKey);
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}_${file.name}';
+      final ref = FirebaseStorage.instance.ref().child('$folderPath/$fileName');
+      final metadata = SettableMetadata(contentType: 'image/jpeg');
       
-      final prompt = TextPart('''
-        Analyze this electric bill. Extract the Total Amount Due and the Total KWH consumed.
-        Return ONLY a raw JSON object with exactly these two keys. Do not include markdown formatting or backticks.
-        Example: {"totalBill": 3276.00, "totalKwh": 275.0}
-      ''');
-      final imagePart = DataPart('image/jpeg', bytes);
+      TaskSnapshot snapshot;
 
-      final response = await model.generateContent([Content.multi([prompt, imagePart])]);
-      final text = response.text?.replaceAll('```json', '').replaceAll('```', '').trim() ?? '{}';
+      if (kIsWeb) {
+        final bytes = await file.readAsBytes();
+        snapshot = await ref.putData(bytes, metadata);
+      } else {
+        snapshot = await ref.putFile(File(file.path), metadata);
+      }
       
-      final data = jsonDecode(text);
+      return await snapshot.ref.getDownloadURL();
       
-      setState(() {
-        if (data['totalBill'] != null) _totalBillController.text = data['totalBill'].toString();
-        if (data['totalKwh'] != null) _totalKwhController.text = data['totalKwh'].toString();
-      });
-
-      _showSuccessSnackBar('Bill scanned successfully!');
     } catch (e) {
-      _showErrorSnackBar('Failed to read bill. Please try taking the photo closer.');
-      debugPrint(e.toString());
-    } finally {
-      setState(() => _isScanningBill = false);
+      debugPrint("Upload error: $e");
+      throw Exception(e.toString()); 
     }
   }
 
-  Future<void> _scanMeterImage() async {
-    const apiKey = String.fromEnvironment('GEMINI_API_KEY');
-    if (apiKey.isEmpty) {
-      _showErrorSnackBar('API Key missing. Please check your build command.');
-      return;
-    }
-
+  Future<void> _takeBillPhoto() async {
     try {
-      final XFile? image = await _picker.pickImage(source: ImageSource.camera, imageQuality: 70);
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.camera, 
+        imageQuality: 70, 
+        maxWidth: 1200,    
+        maxHeight: 1200,
+      ); 
       if (image == null) return;
 
       setState(() {
-        _isScanningMeter = true;
-        _scannedMeterImage = image; 
+        _scannedBillImage = image; 
+        _isBillUploaded = false; 
       });
-
-      final bytes = await image.readAsBytes();
-      final model = GenerativeModel(model: 'gemini-1.5-flash', apiKey: apiKey);
       
-      final prompt = TextPart('''
-        Analyze this electric meter reading. Extract the current numeric reading displayed on the dial/screen.
-        Return ONLY a raw JSON object with this key. Do not include markdown formatting or backticks.
-        Example: {"reading": 3276}
-      ''');
-      final imagePart = DataPart('image/jpeg', bytes);
-
-      final response = await model.generateContent([Content.multi([prompt, imagePart])]);
-      final text = response.text?.replaceAll('```json', '').replaceAll('```', '').trim() ?? '{}';
-      
-      final data = jsonDecode(text);
-      
-      if (data['reading'] != null) {
-        setState(() {
-          _newReadingController.text = data['reading'].toString();
-        });
-        _showSuccessSnackBar('Meter scanned successfully!');
-      } else {
-        _showErrorSnackBar('Could not find a clear number.');
-      }
+      _billUploadFuture = _uploadImageInBackground(image, 'bills');
+      _billUploadFuture!.then((url) {
+        if (mounted && url != null) {
+          setState(() => _isBillUploaded = true);
+        }
+      }).catchError((e) {
+        if (mounted) _showErrorSnackBar("Main Bill Upload Error: $e");
+      });
     } catch (e) {
-      _showErrorSnackBar('Failed to read meter. Please ensure the numbers are clearly visible.');
-      debugPrint(e.toString());
-    } finally {
-      setState(() => _isScanningMeter = false);
+      _showErrorSnackBar('Failed to open camera.');
+    }
+  }
+
+  Future<void> _takeMeterPhoto() async {
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.camera, 
+        imageQuality: 70, 
+        maxWidth: 1200,    
+        maxHeight: 1200,
+      );
+      if (image == null) return;
+
+      setState(() {
+        _scannedMeterImage = image; 
+        _isMeterUploaded = false; 
+      });
+      
+      _meterUploadFuture = _uploadImageInBackground(image, 'meters');
+      _meterUploadFuture!.then((url) {
+        if (mounted && url != null) {
+          setState(() => _isMeterUploaded = true);
+        }
+      }).catchError((e) {
+        if (mounted) _showErrorSnackBar("Meter Upload Error: $e");
+      });
+    } catch (e) {
+      _showErrorSnackBar('Failed to open camera.');
     }
   }
 
@@ -228,15 +234,6 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
     final totalKwh = double.tryParse(_totalKwhController.text) ?? 0;
     final prevReading = double.tryParse(_prevReadingController.text) ?? 0;
     final newReading = double.tryParse(_newReadingController.text) ?? 0;
-
-    if (totalBill <= 0 || totalKwh <= 0 || prevReading <= 0 || newReading <= 0) {
-      _showErrorSnackBar('Please fill in all fields with valid numbers.');
-      return;
-    }
-    if (newReading < prevReading) {
-      _showErrorSnackBar('New reading cannot be lower than previous.');
-      return;
-    }
 
     setState(() => _isCalculating = true);
     await Future.delayed(const Duration(milliseconds: 1200));
@@ -266,8 +263,8 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
           motherConsumed: motherConsumed,
           subBill: subBill,
           motherBill: motherBill,
-          billImageFile: _scannedBillImage, 
-          meterImageFile: _scannedMeterImage, 
+          billUploadFuture: _billUploadFuture, 
+          meterUploadFuture: _meterUploadFuture, 
         ),
       ),
     ).then((savedSuccessfully) {
@@ -283,21 +280,44 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
           
           _scannedBillImage = null;
           _scannedMeterImage = null;
+          _billUploadFuture = null;
+          _meterUploadFuture = null;
+          _isBillUploaded = false;
+          _isMeterUploaded = false;
         });
       }
     });
   }
 
   void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), backgroundColor: const Color(0xFFDC2626), behavior: SnackBarBehavior.floating));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)), 
+      backgroundColor: const Color(0xFFDC2626), 
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 6),
+    ));
   }
 
-  void _showSuccessSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message, style: const TextStyle(fontSize: 18)), backgroundColor: const Color(0xFF059669), behavior: SnackBarBehavior.floating));
+  Widget _buildAnimatedStep({required bool isEnabled, required Widget child}) {
+    return AnimatedOpacity(
+      opacity: isEnabled ? 1.0 : 0.3,
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeInOut,
+      child: IgnorePointer(
+        ignoring: !isEnabled,
+        child: child,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    bool step1Done = _scannedBillImage != null;
+    bool step2Done = step1Done && _totalBillController.text.trim().isNotEmpty;
+    bool step3Done = step2Done && _totalKwhController.text.trim().isNotEmpty;
+    bool step4Done = step3Done && _scannedMeterImage != null;
+    bool step5Done = step4Done && _newReadingController.text.trim().isNotEmpty;
+
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.background,
       appBar: AppBar(
@@ -308,13 +328,17 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
         centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.dashboard_rounded, size: 28),
+            icon: const Icon(Icons.bar_chart_rounded, size: 28),
+            tooltip: 'View Charts',
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (context) => const UsageChartsScreen()));
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.history_rounded, size: 28),
             tooltip: 'View History',
             onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const AdminDashboard()),
-              );
+              Navigator.push(context, MaterialPageRoute(builder: (context) => const AdminDashboard()));
             },
           ),
           const SizedBox(width: 8),
@@ -328,33 +352,198 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                ..._buildFormFields().animate(interval: 50.ms).fade(duration: 400.ms).slideY(begin: 0.1, curve: Curves.easeOutQuad),
+                
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _motherNameController, 
+                        readOnly: true, 
+                        decoration: const InputDecoration(labelText: 'Mother Meter', fillColor: Color(0xFFF3F4F6), suffixIcon: Icon(Icons.lock, color: Color(0xFF9CA3AF))),
+                        style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: TextField(
+                        controller: _subNameController, 
+                        readOnly: true, 
+                        decoration: const InputDecoration(labelText: 'Sub-meter', fillColor: Color(0xFFF3F4F6), suffixIcon: Icon(Icons.lock, color: Color(0xFF9CA3AF))),
+                        style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+                
+                const Padding(padding: EdgeInsets.only(top: 32, bottom: 16), child: Divider(thickness: 2, color: Color(0xFFE5E7EB))),
+                
+                // STEP 1
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          const Flexible(child: Text('Main Bill Details', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1F2937)), overflow: TextOverflow.ellipsis)),
+                          if (_scannedBillImage != null) 
+                            Padding(
+                              padding: const EdgeInsets.only(left: 8.0),
+                              child: _isBillUploaded
+                                  ? const Icon(Icons.check_circle, color: Color(0xFF059669), size: 20).animate().scale(duration: 400.ms, curve: Curves.easeOutBack)
+                                  : const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00796B))),
+                            )
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: _takeBillPhoto,
+                      icon: const Icon(Icons.camera_alt, size: 18),
+                      label: Text(
+                        _scannedBillImage == null ? 'Main Bill Photo Required' : 'Retake Photo',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold), 
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _scannedBillImage == null ? const Color(0xFFFEE2E2) : const Color(0xFFE8F5E9), 
+                        foregroundColor: _scannedBillImage == null ? const Color(0xFFDC2626) : const Color(0xFF2E7D32),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                    )
+                  ],
+                ),
+                const SizedBox(height: 16),
+                
+                // STEP 2
+                _buildAnimatedStep(
+                  isEnabled: step1Done,
+                  child: TextField(
+                    controller: _totalBillController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Total Bill Amount (₱)', prefixText: '₱ ', prefixStyle: TextStyle(fontSize: 22)),
+                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // STEP 3
+                _buildAnimatedStep(
+                  isEnabled: step2Done,
+                  child: TextField(
+                    controller: _totalKwhController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Total KWH Consumed', suffixText: ' kWh'),
+                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                
+                const Padding(padding: EdgeInsets.only(top: 32, bottom: 16), child: Divider(thickness: 2, color: Color(0xFFE5E7EB))),
+                
+                // STEP 4
+                _buildAnimatedStep(
+                  isEnabled: step3Done,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Row(
+                          children: [
+                            const Flexible(child: Text('Sub-meter Readings', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1F2937)), overflow: TextOverflow.ellipsis)),
+                            if (_scannedMeterImage != null) 
+                              Padding(
+                                padding: const EdgeInsets.only(left: 8.0),
+                                child: _isMeterUploaded
+                                    ? const Icon(Icons.check_circle, color: Color(0xFF059669), size: 20).animate().scale(duration: 400.ms, curve: Curves.easeOutBack)
+                                    : const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00796B))),
+                              )
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: step3Done ? _takeMeterPhoto : null, 
+                        icon: const Icon(Icons.camera_alt, size: 18),
+                        label: Text(
+                          _scannedMeterImage == null ? 'Sub-meter Photo Required' : 'Retake Photo',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _scannedMeterImage == null ? const Color(0xFFFEE2E2) : const Color(0xFFE8F5E9), 
+                          foregroundColor: _scannedMeterImage == null ? const Color(0xFFDC2626) : const Color(0xFF2E7D32),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        ),
+                      )
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                
+                _buildAnimatedStep(
+                  isEnabled: step3Done,
+                  child: TextField(
+                    controller: _prevReadingController,
+                    readOnly: _isPrevReadingLocked,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText: 'Sub-meter Previous Reading',
+                      fillColor: _isPrevReadingLocked ? const Color(0xFFF3F4F6) : Colors.white,
+                      suffixIcon: _isLoadingHistory
+                          ? const Padding(
+                              padding: EdgeInsets.all(12.0),
+                              child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                            )
+                          : (_isPrevReadingLocked ? const Icon(Icons.lock, color: Color(0xFF9CA3AF)) : null),
+                    ),
+                    style: TextStyle(
+                      fontSize: 24, 
+                      fontWeight: FontWeight.bold,
+                      color: _isPrevReadingLocked ? const Color(0xFF6B7280) : const Color(0xFF1F2937),
+                    ),
+                  ),
+                ),
+                
+                const SizedBox(height: 24),
+
+                // STEP 5
+                _buildAnimatedStep(
+                  isEnabled: step4Done,
+                  child: TextField(
+                    controller: _newReadingController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Sub-meter New Reading'),
+                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                ),
+
                 const SizedBox(height: 32),
                 
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeOutBack,
-                  transform: _isCalculating ? (Matrix4.identity()..scale(0.95, 0.95)) : Matrix4.identity(),
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 24),
-                      backgroundColor: Theme.of(context).colorScheme.primary,
-                      foregroundColor: Colors.white,
-                      elevation: _isCalculating ? 2 : 8,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                // FINAL STEP
+                _buildAnimatedStep(
+                  isEnabled: step5Done,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeOutBack,
+                    transform: _isCalculating ? (Matrix4.identity()..scale(0.95, 0.95)) : Matrix4.identity(),
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 24),
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        foregroundColor: Colors.white,
+                        elevation: _isCalculating ? 2 : 8,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      ),
+                      onPressed: (_isCalculating || !step5Done) ? null : _calculateBill,
+                      child: _isCalculating
+                          ? const SizedBox(
+                              height: 28,
+                              width: 28,
+                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+                            ).animate().scale(duration: 400.ms, curve: Curves.easeOutBack)
+                          : const Text('Calculate Breakdown', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                     ),
-                    onPressed: _isCalculating ? null : _calculateBill,
-                    child: _isCalculating
-                        ? const SizedBox(
-                            height: 28,
-                            width: 28,
-                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
-                          ).animate().scale(duration: 400.ms, curve: Curves.easeOutBack)
-                        : const Text('Calculate Breakdown', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                  ).animate(target: _isCalculating ? 1 : 0).boxShadow(
+                    end: const BoxShadow(color: Color(0xFF00796B), blurRadius: 20, spreadRadius: 2), 
+                    duration: 400.ms,
                   ),
-                ).animate(target: _isCalculating ? 1 : 0).boxShadow(
-                  end: const BoxShadow(color: Color(0xFF00796B), blurRadius: 20, spreadRadius: 2), 
-                  duration: 400.ms,
                 ),
               ],
             ),
@@ -363,142 +552,10 @@ class _MeterSplitterHomeState extends State<MeterSplitterHome> {
       ),
     );
   }
-
-  List<Widget> _buildFormFields() {
-    return [
-      Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _motherNameController, 
-              readOnly: true, 
-              decoration: const InputDecoration(
-                labelText: 'Mother Meter',
-                fillColor: Color(0xFFF3F4F6),
-                suffixIcon: Icon(Icons.lock, color: Color(0xFF9CA3AF)),
-              ),
-              style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.bold),
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: TextField(
-              controller: _subNameController, 
-              readOnly: true, 
-              decoration: const InputDecoration(
-                labelText: 'Sub-meter',
-                fillColor: Color(0xFFF3F4F6),
-                suffixIcon: Icon(Icons.lock, color: Color(0xFF9CA3AF)),
-              ),
-              style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.bold),
-            ),
-          ),
-        ],
-      ),
-      
-      const Padding(padding: EdgeInsets.only(top: 32, bottom: 16), child: Divider(thickness: 2, color: Color(0xFFE5E7EB))),
-      
-      Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            children: [
-              const Text('Main Bill Details', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1F2937))),
-              if (_scannedBillImage != null) 
-                const Padding(
-                  padding: EdgeInsets.only(left: 8.0),
-                  child: Icon(Icons.check_circle, color: Color(0xFF059669), size: 20),
-                )
-            ],
-          ),
-          if (_isScanningBill) 
-            const SizedBox(width: 24, height: 24, child: CircularProgressIndicator())
-          else
-            ElevatedButton.icon(
-              onPressed: _scanBillImage,
-              icon: const Icon(Icons.camera_alt),
-              label: Text(_scannedBillImage == null ? 'Scan Bill' : 'Retake'),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE8F5E9), foregroundColor: const Color(0xFF2E7D32)),
-            )
-        ],
-      ),
-      const SizedBox(height: 16),
-      TextField(
-        controller: _totalBillController,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: const InputDecoration(labelText: 'Total Bill Amount (₱)', prefixText: '₱ ', prefixStyle: TextStyle(fontSize: 22)),
-        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-      ),
-      const SizedBox(height: 24),
-      TextField(
-        controller: _totalKwhController,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: const InputDecoration(labelText: 'Total KWH Consumed', suffixText: ' kWh'),
-        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-      ),
-      
-      const Padding(padding: EdgeInsets.only(top: 32, bottom: 16), child: Divider(thickness: 2, color: Color(0xFFE5E7EB))),
-      
-      Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            children: [
-              const Text('Sub-meter Readings', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1F2937))),
-              if (_scannedMeterImage != null) 
-                const Padding(
-                  padding: EdgeInsets.only(left: 8.0),
-                  child: Icon(Icons.check_circle, color: Color(0xFF059669), size: 20),
-                )
-            ],
-          ),
-          if (_isScanningMeter) 
-            const SizedBox(width: 24, height: 24, child: CircularProgressIndicator())
-          else
-            ElevatedButton.icon(
-              onPressed: _scanMeterImage,
-              icon: const Icon(Icons.camera_alt),
-              label: Text(_scannedMeterImage == null ? 'Scan Meter' : 'Retake'),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE8F5E9), foregroundColor: const Color(0xFF2E7D32)),
-            )
-        ],
-      ),
-      const SizedBox(height: 16),
-      
-      TextField(
-        controller: _prevReadingController,
-        readOnly: _isPrevReadingLocked,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: InputDecoration(
-          labelText: 'Sub-meter Previous Reading',
-          fillColor: _isPrevReadingLocked ? const Color(0xFFF3F4F6) : Colors.white,
-          suffixIcon: _isLoadingHistory
-              ? const Padding(
-                  padding: EdgeInsets.all(12.0),
-                  child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
-                )
-              : (_isPrevReadingLocked ? const Icon(Icons.lock, color: Color(0xFF9CA3AF)) : null),
-        ),
-        style: TextStyle(
-          fontSize: 24, 
-          fontWeight: FontWeight.bold,
-          color: _isPrevReadingLocked ? const Color(0xFF6B7280) : const Color(0xFF1F2937),
-        ),
-      ),
-      
-      const SizedBox(height: 24),
-      TextField(
-        controller: _newReadingController,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: const InputDecoration(labelText: 'Sub-meter New Reading'),
-        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-      ),
-    ];
-  }
 }
 
 // ============================================================================
-// RESULTS SCREEN 
+// RESULTS SCREEN
 // ============================================================================
 
 class ResultsScreen extends StatefulWidget {
@@ -514,8 +571,8 @@ class ResultsScreen extends StatefulWidget {
   final double motherConsumed;
   final double subBill;
   final double motherBill;
-  final XFile? billImageFile;
-  final XFile? meterImageFile;
+  final Future<String?>? billUploadFuture;
+  final Future<String?>? meterUploadFuture;
 
   const ResultsScreen({
     super.key,
@@ -531,8 +588,8 @@ class ResultsScreen extends StatefulWidget {
     required this.motherConsumed,
     required this.subBill,
     required this.motherBill,
-    this.billImageFile,
-    this.meterImageFile,
+    this.billUploadFuture,
+    this.meterUploadFuture,
   });
 
   @override
@@ -542,26 +599,16 @@ class ResultsScreen extends StatefulWidget {
 class _ResultsScreenState extends State<ResultsScreen> {
   bool _isSaving = false;
 
-  Future<String?> _uploadImage(XFile? file, String folderPath) async {
-    if (file == null) return null;
-    try {
-      final fileName = '${DateTime.now().millisecondsSinceEpoch}_${file.name}';
-      final ref = FirebaseStorage.instance.ref().child('$folderPath/$fileName');
-      
-      final bytes = await file.readAsBytes();
-      await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
-      return await ref.getDownloadURL();
-    } catch (e) {
-      debugPrint("Upload error: $e");
-      return null;
-    }
-  }
-
   Future<void> _saveToFirebase() async {
     setState(() => _isSaving = true);
     try {
-      final billImageUrl = await _uploadImage(widget.billImageFile, 'bills');
-      final meterImageUrl = await _uploadImage(widget.meterImageFile, 'meters');
+      final billImageUrl = widget.billUploadFuture != null 
+          ? await widget.billUploadFuture 
+          : null;
+          
+      final meterImageUrl = widget.meterUploadFuture != null 
+          ? await widget.meterUploadFuture 
+          : null;
 
       final billRecord = {
         'timestamp': FieldValue.serverTimestamp(),
@@ -588,7 +635,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Bill and photos saved successfully!', style: TextStyle(fontSize: 18)), 
+          content: Text('Record successfully saved!', style: TextStyle(fontSize: 18)), 
           backgroundColor: Color(0xFF059669), 
           behavior: SnackBarBehavior.floating
         ));
@@ -599,7 +646,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Failed to save: $e', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), 
           backgroundColor: const Color(0xFFDC2626), 
-          behavior: SnackBarBehavior.floating
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 6),
         ));
       }
     } finally {
@@ -706,7 +754,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
                     icon: _isSaving 
                         ? const SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 3)) 
                         : const Icon(Icons.cloud_upload_rounded, size: 28),
-                    label: Text(_isSaving ? 'Uploading Photos & Saving...' : 'Save Record', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                    label: Text(_isSaving ? 'Finalizing...' : 'Save Record', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                   ),
                 )
               ].animate(interval: 100.ms).fadeIn(duration: 400.ms).slideY(begin: 0.1, curve: Curves.easeOutQuad),
@@ -771,7 +819,7 @@ class AdminDashboard extends StatelessWidget {
 
   Future<void> _confirmDelete(BuildContext context, String docId, String? billUrl, String? meterUrl) async {
     final pinController = TextEditingController();
-    const String adminPin = "123456"; 
+    const String adminPin = "063941"; 
 
     final confirm = await showDialog<bool>(
       context: context,
@@ -865,13 +913,15 @@ class AdminDashboard extends StatelessWidget {
     showDialog(
       context: context,
       builder: (context) => Dialog(
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         insetPadding: const EdgeInsets.all(16),
         child: Stack(
-          alignment: Alignment.topRight,
+          alignment: Alignment.center,
           children: [
             InteractiveViewer( 
-              child: Center(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
                 child: Image.network(
                   url, 
                   fit: BoxFit.contain,
@@ -882,15 +932,10 @@ class AdminDashboard extends StatelessWidget {
                 ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white, size: 32),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ),
           ],
-        ),
+        ).animate() 
+         .scale(duration: 400.ms, curve: Curves.easeOutBack)
+         .fadeIn(duration: 400.ms),
       ),
     );
   }
@@ -943,8 +988,12 @@ class AdminDashboard extends StatelessWidget {
               final totalBill = (inputs['totalBill'] as num?)?.toDouble() ?? 0.0;
               final totalKwh = (inputs['totalKwh'] as num?)?.toDouble() ?? 0.0;
               final rate = (breakdown['ratePerKwh'] as num?)?.toDouble() ?? 0.0;
+              
               final subAmount = (breakdown['subMeterAmount'] as num?)?.toDouble() ?? 0.0;
               final motherAmount = (breakdown['motherMeterAmount'] as num?)?.toDouble() ?? 0.0;
+              
+              final subKwh = (breakdown['subMeterKwh'] as num?)?.toDouble() ?? 0.0;
+              final motherKwh = (breakdown['motherMeterKwh'] as num?)?.toDouble() ?? 0.0;
 
               final billImageUrl = data['billImageUrl'] as String?;
               final meterImageUrl = data['meterImageUrl'] as String?;
@@ -961,55 +1010,53 @@ class AdminDashboard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // TOP ROW: Date & Delete Button
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              const Icon(Icons.calendar_month, color: Color(0xFF6B7280), size: 20),
-                              const SizedBox(width: 8),
-                              Text(dateStr, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF374151))),
-                            ],
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8.0),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.calendar_month, color: Color(0xFF6B7280), size: 20),
+                                const SizedBox(width: 8),
+                                Text(dateStr, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF374151))),
+                              ],
+                            ),
                           ),
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline, color: Color(0xFFDC2626)),
-                            tooltip: 'Delete Record',
-                            splashRadius: 24,
-                            onPressed: () => _confirmDelete(context, docId, billImageUrl, meterImageUrl),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                    decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(20)),
+                                    child: Text('Rate: ₱${rate.toStringAsFixed(4)}', style: const TextStyle(color: Color(0xFF047857), fontWeight: FontWeight.bold)),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '(₱${totalBill.toStringAsFixed(2)} ÷ ${totalKwh.toStringAsFixed(1)} kWh)',
+                                    style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF), fontStyle: FontStyle.italic),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(width: 4),
+                              IconButton(
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                icon: const Icon(Icons.delete_outline, color: Color(0xFFDC2626)),
+                                tooltip: 'Delete Record',
+                                splashRadius: 24,
+                                onPressed: () => _confirmDelete(context, docId, billImageUrl, meterImageUrl),
+                              ),
+                            ],
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-
-                      // NEW EXPLICIT MATH BOX (Prevents screen overflow hiding the text)
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE8F5E9),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFA7F3D0)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Rate: ₱${rate.toStringAsFixed(4)} per kWh', 
-                              style: const TextStyle(color: Color(0xFF047857), fontWeight: FontWeight.bold, fontSize: 16)
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Formula: ₱${totalBill.toStringAsFixed(2)} ÷ ${totalKwh.toStringAsFixed(1)} kWh',
-                              style: const TextStyle(color: Color(0xFF065F46), fontSize: 13, fontStyle: FontStyle.italic),
-                            ),
-                          ],
-                        ),
-                      ),
+                      const Divider(height: 24, thickness: 1.5, color: Color(0xFFF3F4F6)),
                       
-                      const Divider(height: 32, thickness: 1.5, color: Color(0xFFF3F4F6)),
-                      
-                      // THE SPLIT WITH DYNAMIC NAMES
                       Row(
                         children: [
                           Expanded(
@@ -1019,10 +1066,12 @@ class AdminDashboard extends StatelessWidget {
                                 Text('$motherNameDisplay Due', style: const TextStyle(color: Color(0xFF6B7280), fontSize: 14, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
                                 const SizedBox(height: 4),
                                 Text('₱${motherAmount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1D4ED8))),
+                                const SizedBox(height: 2),
+                                Text('${motherKwh.toStringAsFixed(1)} kWh', style: const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w500)),
                               ],
                             ),
                           ),
-                          Container(width: 1.5, height: 40, color: const Color(0xFFF3F4F6)),
+                          Container(width: 1.5, height: 56, color: const Color(0xFFF3F4F6)),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.end,
@@ -1030,6 +1079,8 @@ class AdminDashboard extends StatelessWidget {
                                 Text('$subNameDisplay Due', style: const TextStyle(color: Color(0xFF6B7280), fontSize: 14, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
                                 const SizedBox(height: 4),
                                 Text('₱${subAmount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF047857))),
+                                const SizedBox(height: 2),
+                                Text('${subKwh.toStringAsFixed(1)} kWh', style: const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w500)),
                               ],
                             ),
                           ),
@@ -1038,7 +1089,7 @@ class AdminDashboard extends StatelessWidget {
                       
                       if (billImageUrl != null || meterImageUrl != null) ...[
                         const SizedBox(height: 20),
-                        const Text('Attachments:', style: TextStyle(color: Color(0xFF4B5563), fontWeight: FontWeight.w600)),
+                        const Text('Audit Photos:', style: TextStyle(color: Color(0xFF4B5563), fontWeight: FontWeight.w600)),
                         const SizedBox(height: 8),
                         Row(
                           children: [
@@ -1047,28 +1098,34 @@ class AdminDashboard extends StatelessWidget {
                                 onTap: () => _showImageDialog(context, billImageUrl, 'Original Bill'),
                                 child: Container(
                                   margin: const EdgeInsets.only(right: 12),
-                                  height: 60,
-                                  width: 60,
+                                  height: 64,
+                                  width: 64,
                                   decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: const Color(0xFFD1D5DB)),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: const Color(0xFFD1D5DB), width: 2),
                                     image: DecorationImage(image: NetworkImage(billImageUrl), fit: BoxFit.cover),
                                   ),
-                                  child: const Icon(Icons.receipt_long, color: Colors.white70, size: 28),
+                                  child: Container(
+                                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.3), borderRadius: BorderRadius.circular(10)),
+                                    child: const Center(child: Icon(Icons.receipt_long, color: Colors.white, size: 28)),
+                                  ),
                                 ),
                               ),
                             if (meterImageUrl != null)
                               GestureDetector(
                                 onTap: () => _showImageDialog(context, meterImageUrl, 'Meter Reading'),
                                 child: Container(
-                                  height: 60,
-                                  width: 60,
+                                  height: 64,
+                                  width: 64,
                                   decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: const Color(0xFFD1D5DB)),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: const Color(0xFFD1D5DB), width: 2),
                                     image: DecorationImage(image: NetworkImage(meterImageUrl), fit: BoxFit.cover),
                                   ),
-                                  child: const Icon(Icons.electric_meter, color: Colors.white70, size: 28),
+                                  child: Container(
+                                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.3), borderRadius: BorderRadius.circular(10)),
+                                    child: const Center(child: Icon(Icons.electric_meter, color: Colors.white, size: 28)),
+                                  ),
                                 ),
                               ),
                           ],
@@ -1095,6 +1152,207 @@ class AdminDashboard extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+// ============================================================================
+// USAGE CHARTS SCREEN (FINAL FULLY FIXED DATA VERSION)
+// ============================================================================
+
+class UsageChartsScreen extends StatelessWidget {
+  const UsageChartsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF0F4F4),
+      appBar: AppBar(
+        title: const Text('Analytics', style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: const Color(0xFF00796B),
+        foregroundColor: Colors.white,
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('monthly_bills').orderBy('timestamp', descending: true).limit(6).snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          
+          final docs = snapshot.data!.docs.reversed.toList();
+          if (docs.isEmpty) return const Center(child: Text("No data to display"));
+
+          List<BarChartGroupData> kwhData = [];
+          List<BarChartGroupData> amountData = [];
+          List<String> labels = [];
+
+          double maxKwh = 0;
+          double maxAmount = 0;
+
+          for (int i = 0; i < docs.length; i++) {
+            final data = docs[i].data() as Map<String, dynamic>;
+            final breakdown = data['calculatedBreakdown'] as Map<String, dynamic>? ?? {};
+            
+            final subKwh = (breakdown['subMeterKwh'] as num?)?.toDouble() ?? 0.0;
+            final motherKwh = (breakdown['motherMeterKwh'] as num?)?.toDouble() ?? 0.0;
+            final subAmount = (breakdown['subMeterAmount'] as num?)?.toDouble() ?? 0.0;
+            final motherAmount = (breakdown['motherMeterAmount'] as num?)?.toDouble() ?? 0.0;
+            
+            // Find highest values to scale the charts dynamically
+            if (motherKwh > maxKwh) maxKwh = motherKwh;
+            if (subKwh > maxKwh) maxKwh = subKwh;
+            if (motherAmount > maxAmount) maxAmount = motherAmount;
+            if (subAmount > maxAmount) maxAmount = subAmount;
+
+            // Extract the date for the labels
+            final ts = data['timestamp'] as Timestamp?;
+            if (ts != null) {
+              final date = ts.toDate();
+              labels.add("${date.month}/${date.day}");
+            } else {
+              labels.add("N/A");
+            }
+
+            // REVERTED to standard tap-to-view tooltips (no overlaps!)
+            kwhData.add(BarChartGroupData(
+              x: i, 
+              barRods: [
+                BarChartRodData(toY: motherKwh, color: const Color(0xFF1D4ED8), width: 14, borderRadius: BorderRadius.circular(4)),
+                BarChartRodData(toY: subKwh, color: const Color(0xFF047857), width: 14, borderRadius: BorderRadius.circular(4)),
+              ],
+            ));
+
+            amountData.add(BarChartGroupData(
+              x: i, 
+              barRods: [
+                BarChartRodData(toY: motherAmount, color: const Color(0xFF1D4ED8), width: 14, borderRadius: BorderRadius.circular(4)),
+                BarChartRodData(toY: subAmount, color: const Color(0xFF047857), width: 14, borderRadius: BorderRadius.circular(4)),
+              ],
+            ));
+          }
+
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                _buildChartCard(context, "Consumption (kWh)", kwhData, labels, maxKwh, false),
+                const SizedBox(height: 20),
+                _buildChartCard(context, "Amount Due (₱)", amountData, labels, maxAmount, true),
+                const SizedBox(height: 20),
+                _buildLegend(),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildChartCard(BuildContext context, String title, List<BarChartGroupData> data, List<String> labels, double maxValue, bool isAmount) {
+    
+    // Mathematical step logic to prevent squishing text
+    double safeMax = maxValue <= 0 ? 100 : (maxValue * 1.2);
+    double stepInterval = (safeMax / 5).ceilToDouble();
+    if (stepInterval == 0) stepInterval = 1;
+
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1F2937))),
+            const SizedBox(height: 24),
+            SizedBox(
+              height: 250,
+              child: BarChart(
+                BarChartData(
+                  barGroups: data, // <--- CRITICAL FIX: THE DATA IS NOW CONNECTED
+                  minY: 0, 
+                  maxY: safeMax, 
+                  barTouchData: BarTouchData(
+                    enabled: true, // You can now cleanly tap any bar to see its exact value
+                    touchTooltipData: BarTouchTooltipData(
+                      tooltipPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      tooltipMargin: 4,
+                      getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                        return BarTooltipItem(
+                          isAmount ? '₱${rod.toY.toStringAsFixed(2)}' : '${rod.toY.toStringAsFixed(1)} kWh',
+                          const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                        );
+                      },
+                    ),
+                  ),
+                  titlesData: FlTitlesData(
+                    leftTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true, 
+                        reservedSize: 45, 
+                        interval: stepInterval, 
+                        getTitlesWidget: (value, meta) {
+                          if (value < 0 || value == safeMax) return const SizedBox.shrink();
+                          String text = value >= 1000 ? '${(value / 1000).toStringAsFixed(1)}k' : value.toInt().toString();
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 8.0),
+                            child: Text(text, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), textAlign: TextAlign.right),
+                          );
+                        },
+                      ),
+                    ),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 30, 
+                        getTitlesWidget: (value, meta) {
+                          if (value.toInt() >= 0 && value.toInt() < labels.length) {
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 8.0),
+                              child: Text(labels[value.toInt()], style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF6B7280))),
+                            );
+                          }
+                          return const SizedBox.shrink();
+                        },
+                      ),
+                    ),
+                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  ),
+                  gridData: FlGridData(show: true, drawVerticalLine: false, horizontalInterval: stepInterval),
+                  borderData: FlBorderData(show: false),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLegend() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _legendItem("Mother Meter", const Color(0xFF1D4ED8)),
+          const SizedBox(width: 24),
+          _legendItem("Sub-meter", const Color(0xFF047857)),
+        ],
+      ),
+    );
+  }
+
+  Widget _legendItem(String text, Color color) {
+    return Row(
+      children: [
+        Container(width: 16, height: 16, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4))),
+        const SizedBox(width: 8),
+        Text(text, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16, color: Color(0xFF374151))),
+      ],
     );
   }
 }
