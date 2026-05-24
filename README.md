@@ -1,6 +1,6 @@
-# ⚡ Meter Splitter App
+# ⚡ Meter Splitter [v1.5.0]
 
-An AI-powered Flutter web and mobile application designed to automatically calculate, split, and log sub-meter electricity bills with cloud synchronization.
+A professional-grade full-stack solution for managing and splitting shared electricity bills. Designed for efficient tracking, automated breakdown calculations, and visual consumption analytics.
 
 By leveraging the Google Gemini API, this app eliminates manual data entry by extracting crucial numbers directly from photos of your electric bill and your physical sub-meter.
 
@@ -25,41 +25,54 @@ Meter Splitter automates this entirely. It calculates the *exact* floating rate 
 ## 📸 App Screenshots
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/ac794ca9-0d0a-4f1c-91ac-7ff2102e8276" width="30%" alt="Main Dashboard Input Screen">&nbsp; &nbsp; &nbsp;
-  <img src="https://github.com/user-attachments/assets/39a95319-e047-4568-807e-446de6c81191" width="30%" alt="Computation Results Screen">&nbsp; &nbsp; &nbsp;
-  <img src="https://github.com/user-attachments/assets/dcb34464-7837-4b4f-b598-9a26123a1514" width="30%" alt="Billing History Dashboard">&nbsp; &nbsp; &nbsp;
+  <img src="https://github.com/user-attachments/assets/ac794ca9-0d0a-4f1c-91ac-7ff2102e8276" width="30%" alt="Main Dashboard Input Screen">&nbsp; &nbsp; &nbsp; &nbsp;
+  <img src="https://github.com/user-attachments/assets/39a95319-e047-4568-807e-446de6c81191" width="30%" alt="Computation Results Screen">&nbsp; &nbsp; &nbsp; &nbsp;
+  <img src="https://github.com/user-attachments/assets/2b12e048-e2cf-413e-9830-892d879a280c" width="30%" alt="Analytics Screen">&nbsp; &nbsp; &nbsp; &nbsp;
+  <img src="https://github.com/user-attachments/assets/ac859d9e-b4c6-4ef8-a218-262bf0e6f898" width="30%" alt="Billing History Screen">&nbsp; &nbsp; &nbsp; &nbsp;
 </p>
 
 ---
 
-## ✨ Key Features
+## 🚀 Key Features
 
-* **🧾 AI Bill Scanning:** Snap a photo of your main electric bill, and Gemini instantly extracts the **Total Amount Due** and **Total KWH Consumed**.
-* **📸 AI Meter Scanning:** Take a picture of your sub-meter, and the AI will read and input the current dial reading automatically.
-* **🧮 Automated Breakdown:** Instantly calculates the dynamic per-kWh rate and provides a clean, visual breakdown of the amount owed by the mother meter vs. the sub-meter.
-* **🔒 Locked Historical Data:** Automatically fetches the previous month's reading from the database and locks it in as the current month's baseline to prevent tampering or typos.
-* **📈 Price Trend Indicators:** Visually compares the current month's per-kWh rate to the previous month's rate, showing if electricity prices went up or down.
-* **☁️ Cloud Storage:** Securely saves all calculated records, timestamps, and receipt photos directly to a Firebase Cloud Firestore database for transparent tracking.
-* **📱 Cross-Platform:** Beautifully responsive for the web and fully compilable as a native mobile app.
+* **Smart Calculation:** Automates the split between a "Mother Meter" and "Sub-meter" based on your input parameters.
+* **Billing History & Auditing:** Secure storage of all past bills.
+    * Image-based audit trail: Upload photos of your original bill and meter readings.
+    * **Payment Tracking:** "Mark as Paid" workflow with date logging and receipt photo capture.
+* **Advanced Analytics:**
+    * Dual-chart visualization (Consumption in kWh & Amount in ₱).
+    * **Trend Analysis:** Interactive Red Trend Line overlay to track the trajectory of your monthly expenses and consumption.
+    * Permanent data labeling for at-a-glance monitoring.
+* **Administrative Control:** * PIN-protected deletion to prevent accidental removal of records.
+    * Automatic receipt and photo cleanup upon record deletion.
 
 ## 🛠 Tech Stack
 
-* **Framework:** [Flutter](https://flutter.dev/) (Web & Mobile)
-* **Database & Storage:** [Firebase](https://firebase.google.com/) (Cloud Firestore & Firebase Storage)
-* **AI Engine:** [Google Gemini API](https://aistudio.google.com/) (`gemini-1.5-flash` model)
+* **Frontend:** Flutter (Full-stack Web/Mobile)
+* **Backend:** Firebase (Cloud Firestore & Firebase Storage)
+* **Visualization:** `fl_chart` with custom Trend Line overlays
 * **Animations:** `flutter_animate` for smooth, GSAP-style UI transitions and 3D effects.
 
-## 🚀 Getting Started (Local Development)
+## 📋 Latest Version Updates (v1.5.0)
 
-### Prerequisites
-* Flutter SDK installed
-* Firebase CLI installed and logged in
-* A Google AI Studio API Key
-* Android Studio (for APK building/emulation)
+* **Trend Line Integration:** Added a smooth, red visual trend line to Analytics charts to show bill trajectory.
+* **Visual Enhancements:** Increased legibility of analytics data labels (Bold, outline shadow).
+* **Workflow Improvement:** Moved "Mark as Paid" button directly to the billing history card for easier access.
+* **Audit Expansion:** Receipts are now fully integrated into the Audit Photos row as the third thumbnail.
 
-### Installation
+## 🚀 Deployment Instructions
 
-1. **Clone the repository:**
+### For Development
+1. Clone the repository.
+2. Ensure you have the latest Flutter SDK installed.
+3. Run `flutter pub get` to install dependencies.
+4. Run the app: `flutter run -d chrome --dart-define=GEMINI_API_KEY=YOUR_KEY`
+
+### For Production
+1. Build the web project:
    ```bash
-   git clone [https://github.com/ojrtaradel/my-meter-splitter.git](https://github.com/ojrtaradel/my-meter-splitter.git)
-   cd my-meter-splitter
+   flutter build web --dart-define=GEMINI_API_KEY=YOUR_KEY
+
+2. Deploy to Firebase:
+   ```bash
+   firebase deploy --only hosting
