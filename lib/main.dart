@@ -1,4 +1,4 @@
-// [Version: v1.4.1]
+// [Version: v1.5.0]
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -1336,6 +1336,10 @@ class UsageChartsScreen extends StatelessWidget {
           List<BarChartGroupData> amountData = [];
           List<String> labels = [];
 
+          // Trend Line spots
+          List<FlSpot> kwhTrendSpots = [];
+          List<FlSpot> amountTrendSpots = [];
+
           double maxKwh = 0;
           double maxAmount = 0;
 
@@ -1348,10 +1352,13 @@ class UsageChartsScreen extends StatelessWidget {
             final subAmount = (breakdown['subMeterAmount'] as num?)?.toDouble() ?? 0.0;
             final motherAmount = (breakdown['motherMeterAmount'] as num?)?.toDouble() ?? 0.0;
             
-            if (motherKwh > maxKwh) maxKwh = motherKwh;
-            if (subKwh > maxKwh) maxKwh = subKwh;
-            if (motherAmount > maxAmount) maxAmount = motherAmount;
-            if (subAmount > maxAmount) maxAmount = subAmount;
+            // Calculate totals for the trend line
+            double totalKwh = motherKwh + subKwh;
+            double totalAmount = motherAmount + subAmount;
+
+            // Make sure the chart scales to fit the TOTAL trend line, not just the bars
+            if (totalKwh > maxKwh) maxKwh = totalKwh;
+            if (totalAmount > maxAmount) maxAmount = totalAmount;
 
             final ts = data['timestamp'] as Timestamp?;
             if (ts != null) {
@@ -1360,6 +1367,10 @@ class UsageChartsScreen extends StatelessWidget {
             } else {
               labels.add("N/A");
             }
+
+            // Populate trend line spots
+            kwhTrendSpots.add(FlSpot(i.toDouble(), totalKwh));
+            amountTrendSpots.add(FlSpot(i.toDouble(), totalAmount));
 
             kwhData.add(BarChartGroupData(
               x: i, 
@@ -1384,9 +1395,9 @@ class UsageChartsScreen extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
-                _buildChartCard(context, "Consumption (kWh)", kwhData, labels, maxKwh, false),
+                _buildChartCard(context, "Consumption (kWh)", kwhData, labels, maxKwh, false, kwhTrendSpots),
                 const SizedBox(height: 20),
-                _buildChartCard(context, "Amount Due (₱)", amountData, labels, maxAmount, true),
+                _buildChartCard(context, "Amount Due (₱)", amountData, labels, maxAmount, true, amountTrendSpots),
                 const SizedBox(height: 20),
                 _buildLegend(),
               ],
@@ -1397,7 +1408,7 @@ class UsageChartsScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildChartCard(BuildContext context, String title, List<BarChartGroupData> data, List<String> labels, double maxValue, bool isAmount) {
+  Widget _buildChartCard(BuildContext context, String title, List<BarChartGroupData> data, List<String> labels, double maxValue, bool isAmount, List<FlSpot> trendSpots) {
     
     double safeMax = maxValue <= 0 ? 100 : (maxValue * 1.35);
     double stepInterval = (safeMax / 5).ceilToDouble();
@@ -1414,74 +1425,125 @@ class UsageChartsScreen extends StatelessWidget {
             const SizedBox(height: 24),
             SizedBox(
               height: 250,
-              child: BarChart(
-                BarChartData(
-                  barGroups: data, 
-                  minY: 0, 
-                  maxY: safeMax, 
-                  barTouchData: BarTouchData(
-                    enabled: false, 
-                    touchTooltipData: BarTouchTooltipData(
-                      getTooltipColor: (group) => Colors.transparent, 
-                      tooltipPadding: EdgeInsets.zero,
-                      tooltipMargin: 2,
-                      getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                        String valText;
-                        
-                        if (isAmount) {
-                          valText = '₱${rod.toY.toStringAsFixed(2)}';
-                        } else {
-                          if (rod.toY >= 1000) {
-                            valText = '${(rod.toY / 1000).toStringAsFixed(1)}k';
-                          } else {
-                            valText = rod.toY.toStringAsFixed(1);
-                          }
-                        }
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Layer 1: The Bars
+                  BarChart(
+                    BarChartData(
+                      barGroups: data, 
+                      minY: 0, 
+                      maxY: safeMax, 
+                      barTouchData: BarTouchData(
+                        enabled: false, 
+                        touchTooltipData: BarTouchTooltipData(
+                          getTooltipColor: (group) => Colors.transparent, 
+                          tooltipPadding: EdgeInsets.zero,
+                          tooltipMargin: 4,
+                          getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                            String valText;
+                            
+                            if (isAmount) {
+                              valText = '₱${rod.toY.toStringAsFixed(2)}';
+                            } else {
+                              if (rod.toY >= 1000) {
+                                valText = '${(rod.toY / 1000).toStringAsFixed(1)}k';
+                              } else {
+                                valText = rod.toY.toStringAsFixed(1);
+                              }
+                            }
 
-                        return BarTooltipItem(
-                          valText,
-                          TextStyle(color: rod.color, fontWeight: FontWeight.bold, fontSize: 10), 
-                        );
-                      },
-                    ),
-                  ),
-                  titlesData: FlTitlesData(
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true, 
-                        reservedSize: 45, 
-                        interval: stepInterval, 
-                        getTitlesWidget: (value, meta) {
-                          if (value < 0 || value >= safeMax) return const SizedBox.shrink();
-                          String text = value >= 1000 ? '${(value / 1000).toStringAsFixed(1)}k' : value.toInt().toString();
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 8.0),
-                            child: Text(text, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), textAlign: TextAlign.right),
-                          );
-                        },
-                      ),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 30, 
-                        getTitlesWidget: (value, meta) {
-                          if (value.toInt() >= 0 && value.toInt() < labels.length) {
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 8.0),
-                              child: Text(labels[value.toInt()], style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF6B7280))),
+                            return BarTooltipItem(
+                              valText,
+                              TextStyle(
+                                color: rod.color, 
+                                fontWeight: FontWeight.w900, 
+                                fontSize: 13,
+                                shadows: const [
+                                  Shadow(color: Colors.white, offset: Offset(-1, -1)),
+                                  Shadow(color: Colors.white, offset: Offset(1, -1)),
+                                  Shadow(color: Colors.white, offset: Offset(1, 1)),
+                                  Shadow(color: Colors.white, offset: Offset(-1, 1)),
+                                ],
+                              ), 
                             );
-                          }
-                          return const SizedBox.shrink();
-                        },
+                          },
+                        ),
                       ),
+                      titlesData: FlTitlesData(
+                        leftTitles: AxisTitles(
+                          sideTitles: SideTitles(
+                            showTitles: true, 
+                            reservedSize: 45, 
+                            interval: stepInterval, 
+                            getTitlesWidget: (value, meta) {
+                              if (value < 0 || value >= safeMax) return const SizedBox.shrink();
+                              String text = value >= 1000 ? '${(value / 1000).toStringAsFixed(1)}k' : value.toInt().toString();
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 8.0),
+                                child: Text(text, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)), textAlign: TextAlign.right),
+                              );
+                            },
+                          ),
+                        ),
+                        bottomTitles: AxisTitles(
+                          sideTitles: SideTitles(
+                            showTitles: true,
+                            reservedSize: 30, 
+                            getTitlesWidget: (value, meta) {
+                              if (value.toInt() >= 0 && value.toInt() < labels.length) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(top: 8.0),
+                                  child: Text(labels[value.toInt()], style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF6B7280))),
+                                );
+                              }
+                              return const SizedBox.shrink();
+                            },
+                          ),
+                        ),
+                        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      ),
+                      gridData: FlGridData(show: true, drawVerticalLine: false, horizontalInterval: stepInterval),
+                      borderData: FlBorderData(show: false),
                     ),
-                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                   ),
-                  gridData: FlGridData(show: true, drawVerticalLine: false, horizontalInterval: stepInterval),
-                  borderData: FlBorderData(show: false),
-                ),
+                  
+                  // Layer 2: The Red Trend Line
+                  LineChart(
+                    LineChartData(
+                      minY: 0,
+                      maxY: safeMax,
+                      minX: -0.5, // Matches the BarChart's implicit spacing exactly
+                      maxX: labels.length - 0.5,
+                      lineTouchData: const LineTouchData(enabled: false), // Prevent touching the line
+                      gridData: const FlGridData(show: false), // Hide secondary grid
+                      borderData: FlBorderData(show: false),
+                      titlesData: FlTitlesData(
+                        // Crucial: Copy the exact padding layout so the inner chart areas perfectly align
+                        leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 45, getTitlesWidget: (v, m) => const SizedBox.shrink())),
+                        bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 30, getTitlesWidget: (v, m) => const SizedBox.shrink())),
+                        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      ),
+                      lineBarsData: [
+                        LineChartBarData(
+                          spots: trendSpots,
+                          isCurved: true,
+                          curveSmoothness: 0.35,
+                          color: const Color(0xFFDC2626), // Bold Red
+                          barWidth: 3,
+                          isStrokeCapRound: true,
+                          dotData: const FlDotData(show: false), // Hide individual dots for a clean swoosh
+                          belowBarData: BarAreaData(
+                            show: true,
+                            color: const Color(0xFFDC2626).withOpacity(0.05), // Very subtle red glow
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -1501,18 +1563,24 @@ class UsageChartsScreen extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _legendItem("Mother Meter", const Color(0xFF1D4ED8)),
+          _legendItem("Mother Meter", const Color(0xFF1D4ED8), false),
           const SizedBox(width: 24),
-          _legendItem("Sub-meter", const Color(0xFF047857)),
+          _legendItem("Sub-meter", const Color(0xFF047857), false),
+          const SizedBox(width: 24),
+          _legendItem("Total Trend", const Color(0xFFDC2626), true),
         ],
       ),
     );
   }
 
-  Widget _legendItem(String text, Color color) {
+  Widget _legendItem(String text, Color color, bool isLine) {
     return Row(
       children: [
-        Container(width: 16, height: 16, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4))),
+        Container(
+          width: 16, 
+          height: isLine ? 4 : 16, // Thin rectangle to denote a line
+          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(isLine ? 2 : 4)),
+        ),
         const SizedBox(width: 8),
         Text(text, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16, color: Color(0xFF374151))),
       ],
